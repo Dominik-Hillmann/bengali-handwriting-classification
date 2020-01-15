@@ -1,2 +1,4 @@
 *.parquet
 *.zip
+.ipynb_checkpoints/
+.vscode/
