@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # Python libraries
 import os
 
@@ -51,9 +52,8 @@ def load_y() -> pd.DataFrame:
         index_col = 0
     )
     train_y_low_res = train_y[['grapheme_root', 'vowel_diacritic', 'consonant_diacritic']]
-    # train_X_low_res = pd.DataFrame(columns = PX_COLS)
 
-    return train_y_low_res#, train_X_low_res
+    return train_y_low_res
 
 
 def get_observation(train_X_batch: pd.DataFrame, i: int) -> list:
