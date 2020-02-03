@@ -1,25 +1,54 @@
+# Python libraries
+from os import path
+import random
+
+# External modules
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
 import torch.optim as optim
+
 from tqdm import tqdm
+import pandas as pd
+import numpy as np
 
-device_num = torch.cuda.current_device()
-print(
-    torch.cuda.device(device_num),
-    torch.cuda.device_count(),
-    torch.cuda.get_device_name(device_num),
-    torch.cuda.is_available()
-)
+# Constants
+DATA_PATH = path.join('data', 'bengaliai-cv19', 'generated-data')
+SEED = 69
 
-"""
-Input shape of pictures:
-* original shape is (137, 236)
+# Settings
+torch.manual_seed(SEED)
+random.seed(SEED)
 
-* to make it smaller first, let's say:
-    * ((137 - 1) / 2) / 2 == 34
-    * (236 / 2) / 2 == 59
-"""
+# Typing
+from typing import Tuple
+
+
+
+def main() -> None:
+    detect_gpu()
+
+    simple_cnn = Net()
+    optimizer = optim.Adam(simple_cnn.parameters(), lr = 0.001)
+    loss = nn.CrossEntropyLoss() # multiclass, single label => categorical crossentropy as loss
+
+    BATCH_SIZE = 100
+    EPOCHS = 10
+    for epoch in range(EPOCHS):
+        for i in tqdm(range(0, len(train_X), BATCH_SIZE)): # from 0, to the len of x, stepping BATCH_SIZE at a time. [:50] ..for now just to dev
+            #print(f"{i}:{i+BATCH_SIZE}")
+            batch_X = train_X[i:i+BATCH_SIZE].view(-1, 1, 50, 50)
+            batch_y = train_y[i:i+BATCH_SIZE]
+
+            net.zero_grad()
+
+            outputs = net(batch_X)
+            loss = loss_function(outputs, batch_y)
+            loss.backward()
+            optimizer.step()    # Does the update
+
+        print(f"Epoch: {epoch}. Loss: {loss}")
+
 
 class Net(nn.Module):
     def __init__(self):
@@ -33,7 +62,7 @@ class Net(nn.Module):
 
         # First dense input = [batch_size, height * width * num_channels]
         # .view is the torch tensor version of numpy's reshape
-        x = torch.randn(59, 34).view(-1, 1, 59, 34) # pylint: disable=no-member
+        x = torch.randn(32, 32).view(-1, 1, 32, 32) # pylint: disable=no-member
         self._conv_out_len = None
         self.conv_forward(x)
 
@@ -83,30 +112,40 @@ class Net(nn.Module):
         return x
 
 
-def main():
-    neural_net = Net()
-    optimizer = optim.Adam(neural_net.parameters(), lr = 0.001)
-    loss = nn.CrossEntropyLoss() # multiclass, single label => categorical crossentropy as loss
+def get_data(data_path: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    train_data_low_res = pd.read_parquet(path.join(DATA_PATH, '32by32-y-and-X.parquet'))
+    # train_y_low_res = train_data_low_res[train_data_low_res.columns[:3]]
+    # train_X_low_res = train_data_low_res[train_data_low_res.columns[3:]]
+    # del train_data_low_res
 
 
-BATCH_SIZE = 100
-EPOCHS = 1
+def train_val_test_split(data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """60% train, 20% validation, 20% test set split.
+    Source: https://stackoverflow.com/questions/38250710/how-to-split-data-into-3-sets-train-validation-and-test
+    
+    Arguments:
+        data {pd.DataFrame} -- [description]
+    
+    Returns:
+        Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] -- [description]
+    """
 
-# for epoch in range(EPOCHS):
-#     for i in tqdm(range(0, len(train_X), BATCH_SIZE)): # from 0, to the len of x, stepping BATCH_SIZE at a time. [:50] ..for now just to dev
-#         #print(f"{i}:{i+BATCH_SIZE}")
-#         batch_X = train_X[i:i+BATCH_SIZE].view(-1, 1, 50, 50)
-#         batch_y = train_y[i:i+BATCH_SIZE]
+    train_data, val_data, test_data = np.split(
+        data.sample(frac = 1), 
+        [ int(0.6 * len(data)), int(0.8 * len(data)) ]
+    )
 
-#         net.zero_grad()
+    return train_data, val_data, test_data
 
-#         outputs = net(batch_X)
-#         loss = loss_function(outputs, batch_y)
-#         loss.backward()
-#         optimizer.step()    # Does the update
 
-#     print(f"Epoch: {epoch}. Loss: {loss}")
-
+def detect_gpu() -> None:
+    device_num = torch.cuda.current_device()
+    print(
+        torch.cuda.device(device_num),
+        torch.cuda.device_count(),
+        torch.cuda.get_device_name(device_num),
+        torch.cuda.is_available()
+    )
 
 
 if __name__ == '__main__':
