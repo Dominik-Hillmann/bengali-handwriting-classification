@@ -11,10 +11,13 @@ import torch.optim as optim
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
+from sklearn.model_selection import train_test_split
 
 # Constants
-DATA_PATH = path.join('data', 'bengaliai-cv19', 'generated-data')
+DATA_PATH = path.join('data', 'generated-data')
 SEED = 69
+BATCH_SIZE = 100
+EPOCHS = 10
 
 # Settings
 torch.manual_seed(SEED)
@@ -27,30 +30,55 @@ from typing import Tuple
 
 def main() -> None:
     detect_gpu()
+    train_X, train_y, val_X, val_y, test_X, test_y = get_data(DATA_PATH, 'grapheme_root')
+    train((train_X, train_y), (val_X, val_y))
+    
+
+def train(train: Tuple[pd.DataFrame, pd.DataFrame], val: Tuple[pd.DataFrame, pd.DataFrame]) -> None:
+    train_X, train_y = train
+    train_X, train_y = torch.from_numpy(train_X.values), torch.from_numpy(train_y.values)
+    val_X, val_y = val
+    val_X, val_y = torch.from_numpy(val_X.values), torch.from_numpy(val_y.values)
 
     simple_cnn = Net()
     optimizer = optim.Adam(simple_cnn.parameters(), lr = 0.001)
     loss = nn.CrossEntropyLoss() # multiclass, single label => categorical crossentropy as loss
 
-    BATCH_SIZE = 100
-    EPOCHS = 10
     for epoch in range(EPOCHS):
-        for i in tqdm(range(0, len(train_X), BATCH_SIZE)): # from 0, to the len of x, stepping BATCH_SIZE at a time. [:50] ..for now just to dev
-            #print(f"{i}:{i+BATCH_SIZE}")
-            batch_X = train_X[i:i+BATCH_SIZE].view(-1, 1, 50, 50)
-            batch_y = train_y[i:i+BATCH_SIZE]
+        batch_range = range(0, len(train_X), BATCH_SIZE) # from 0, to the len of x, stepping BATCH_SIZE at a time. [:50] ..for now just to dev
+        for i in tqdm(batch_range): 
+            print(f"{i}:{i + BATCH_SIZE}")
+            batch_X = train_X[i:(i + BATCH_SIZE)].view(-1, 1, 32, 32)
+            batch_y = train_y[i:(i + BATCH_SIZE)]
 
-            net.zero_grad()
+            simple_cnn.zero_grad()
 
-            outputs = net(batch_X)
+            outputs = simple_cnn(batch_X)
             loss = loss_function(outputs, batch_y)
             loss.backward()
-            optimizer.step()    # Does the update
+            optimizer.step() # Does the update
 
         print(f"Epoch: {epoch}. Loss: {loss}")
 
 
+def validate():
+    correct = 0
+    total = 0
+    with torch.no_grad():
+        for i in tqdm(range(len(test_X))):
+            real_class = torch.argmax(test_y[i])
+            net_out = net(test_X[i].view(-1, 1, 50, 50))[0]  # returns a list, 
+            predicted_class = torch.argmax(net_out)
+
+            if predicted_class == real_class:
+                correct += 1
+            total += 1
+
+    print("Accuracy: ", round(correct/total, 3))
+
+
 class Net(nn.Module):
+
     def __init__(self):
         super().__init__()
         # 1 Inputchannel, 32 Filter somit Outputfeatures, 3 mal 3 Filtergröße
@@ -62,13 +90,12 @@ class Net(nn.Module):
 
         # First dense input = [batch_size, height * width * num_channels]
         # .view is the torch tensor version of numpy's reshape
-        x = torch.randn(32, 32).view(-1, 1, 32, 32) # pylint: disable=no-member
+        x = torch.randn(32, 32).view(-1, 1, 32, 32)
         self._conv_out_len = None
         self.conv_forward(x)
 
-
         self.dense1 = nn.Linear(self._conv_out_len, 512) # Number values of flattened tensor, ouput neurons
-        self.dense2 = nn.Linear(512, 49) # 40 root letters to be predicted
+        self.dense2 = nn.Linear(512, 168) # 168 root letters to be predicted
 
 
     def conv_forward(self, x):
@@ -112,30 +139,16 @@ class Net(nn.Module):
         return x
 
 
-def get_data(data_path: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    train_data_low_res = pd.read_parquet(path.join(DATA_PATH, '32by32-y-and-X.parquet'))
-    # train_y_low_res = train_data_low_res[train_data_low_res.columns[:3]]
-    # train_X_low_res = train_data_low_res[train_data_low_res.columns[3:]]
-    # del train_data_low_res
-
-
-def train_val_test_split(data: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """60% train, 20% validation, 20% test set split.
-    Source: https://stackoverflow.com/questions/38250710/how-to-split-data-into-3-sets-train-validation-and-test
+def get_data(data_path: str, letter_part: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    data = pd.read_parquet(path.join(data_path, '32by32-y-and-X.parquet'))
+    data_y = data[data.columns[:3]]
+    data_y = pd.get_dummies(data_y[letter_part])
+    data_X = data[data.columns[3:]]
     
-    Arguments:
-        data {pd.DataFrame} -- [description]
-    
-    Returns:
-        Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame] -- [description]
-    """
+    train_X, test_X, train_y, test_y = train_test_split(data_X, data_y, test_size = 0.2, random_state = SEED)
+    train_X, val_X, train_y, val_y = train_test_split(train_X, train_y, test_size = 0.2, random_state = SEED)
 
-    train_data, val_data, test_data = np.split(
-        data.sample(frac = 1), 
-        [ int(0.6 * len(data)), int(0.8 * len(data)) ]
-    )
-
-    return train_data, val_data, test_data
+    return train_X, train_y, val_X, val_y, test_X, test_y
 
 
 def detect_gpu() -> None:
