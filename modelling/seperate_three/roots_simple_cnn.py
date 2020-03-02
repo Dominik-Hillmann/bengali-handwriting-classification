@@ -30,51 +30,85 @@ from typing import Tuple
 
 def main() -> None:
     detect_gpu()
+    device = torch.device('cuda:0')
+    print(device)
+
+    if torch.cuda.is_available():
+        device = torch.device('cuda:0')
+        print('Running on GPU')
+    else:
+        device = torch.device('cpu')
+        print('Running on CPU')
+
     train_X, train_y, val_X, val_y, test_X, test_y = get_data(DATA_PATH, 'grapheme_root')
-    train((train_X, train_y), (val_X, val_y))
+    train((train_X, train_y), (val_X, val_y), device)
+    # validate((test_X, test_y), device)
     
 
-def train(train: Tuple[pd.DataFrame, pd.DataFrame], val: Tuple[pd.DataFrame, pd.DataFrame]) -> None:
+def train(
+    train: Tuple[pd.DataFrame, pd.DataFrame], 
+    val: Tuple[pd.DataFrame, pd.DataFrame],
+    device: torch.device    
+) -> None:
     train_X, train_y = train
     train_X, train_y = torch.from_numpy(train_X.values), torch.from_numpy(train_y.values)
+    # train_X, train_y = train_X.type(torch.DoubleTensor), train_y.type(torch.LongTensor)
     val_X, val_y = val
     val_X, val_y = torch.from_numpy(val_X.values), torch.from_numpy(val_y.values)
+    # val_X, val_y = val_X.type(torch.DoubleTensor), val_y.type(torch.LongTensor)
 
-    simple_cnn = Net()
+    simple_cnn = Net().to(device)
+    simple_cnn = simple_cnn.float()
+    
     optimizer = optim.Adam(simple_cnn.parameters(), lr = 0.001)
-    loss = nn.CrossEntropyLoss() # multiclass, single label => categorical crossentropy as loss
+    
+    loss_function = nn.CrossEntropyLoss() # multiclass, single label => categorical crossentropy as loss
+
+    print(list(simple_cnn.parameters())[0].grad)
 
     for epoch in range(EPOCHS):
         batch_range = range(0, len(train_X), BATCH_SIZE) # from 0, to the len of x, stepping BATCH_SIZE at a time. [:50] ..for now just to dev
         for i in tqdm(batch_range): 
-            print(f"{i}:{i + BATCH_SIZE}")
-            batch_X = train_X[i:(i + BATCH_SIZE)].view(-1, 1, 32, 32)
-            batch_y = train_y[i:(i + BATCH_SIZE)]
+            # print(f"{i}:{i + BATCH_SIZE}")
+            # print(i, i + BATCH_SIZE)
+            batch_X = train_X[i:i + BATCH_SIZE].view(-1, 1, 32, 32).float()
+            # print(batch_X)
+            batch_y = train_y[i:i + BATCH_SIZE].long()
 
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             simple_cnn.zero_grad()
 
-            outputs = simple_cnn(batch_X)
-            loss = loss_function(outputs, batch_y)
+            pred_y = simple_cnn(batch_X)
+            pred_y = func.softmax(pred_y, dim = 1)
+            # Crossentropy berechnet intern schon den softmax https://discuss.pytorch.org/t/cross-entropy-loss-is-not-decreasing/43814/3
+            loss = loss_function(pred_y, batch_y)
             loss.backward()
             optimizer.step() # Does the update
 
-        print(f"Epoch: {epoch}. Loss: {loss}")
+        print(batch_y)
+        print(pred_y)
+
+        print(f"Epoch: {epoch + 1}. Loss: {loss}")
 
 
-def validate():
+def validate(test, cnn, device):
+    test_X, test_y = test
+    test_X, test_y = torch.from_numpy(test_X.values), torch.from_numpy(test_y.values)
+    test_X, test_y = test_X.float(), test_y.long()
+
     correct = 0
     total = 0
     with torch.no_grad():
         for i in tqdm(range(len(test_X))):
             real_class = torch.argmax(test_y[i])
-            net_out = net(test_X[i].view(-1, 1, 50, 50))[0]  # returns a list, 
+            net_out = cnn(test_X[i].view(-1, 1, 50, 50).to(device))[0]  # returns a list, 
             predicted_class = torch.argmax(net_out)
 
             if predicted_class == real_class:
                 correct += 1
             total += 1
 
-    print("Accuracy: ", round(correct/total, 3))
+    print("Accuracy: ", round(correct / total, 3))
 
 
 class Net(nn.Module):
@@ -125,24 +159,24 @@ class Net(nn.Module):
         return x
 
     
-    def output_activation(self, x):
-        # multiclass, single label => softmax
-        return func.softmax(x, dim = 1)
+    # def output_activation(self, x):
+    #     # multiclass, single label => softmax
+    #     return func.softmax(x, dim = 1)
 
 
     def forward(self, x):
         x = self.conv_forward(x)
         x = self.prepare_conv_to_dense(x)
         x = self.dense_forward(x)
-        x = self.output_activation(x)
+        # x = self.output_activation(x)
 
         return x
 
 
 def get_data(data_path: str, letter_part: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     data = pd.read_parquet(path.join(data_path, '32by32-y-and-X.parquet'))
-    data_y = data[data.columns[:3]]
-    data_y = pd.get_dummies(data_y[letter_part])
+    data_y = data[letter_part] # data[data.columns[:3]]
+    # data_y = pd.get_dummies(data_y[letter_part]), does not need to be one hot encoded for PyTorch cross entropy function
     data_X = data[data.columns[3:]]
     
     train_X, test_X, train_y, test_y = train_test_split(data_X, data_y, test_size = 0.2, random_state = SEED)
