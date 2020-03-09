@@ -1,6 +1,7 @@
 # Python libraries
 from os import path
 import random
+import csv
 
 # External modules
 import torch
@@ -61,7 +62,6 @@ def train(
     simple_cnn = simple_cnn.float()
     
     optimizer = optim.Adam(simple_cnn.parameters(), lr = 0.001)
-    
     loss_function = nn.CrossEntropyLoss() # multiclass, single label => categorical crossentropy as loss
 
     print(list(simple_cnn.parameters())[0].grad)
@@ -79,7 +79,7 @@ def train(
             simple_cnn.zero_grad()
 
             pred_y = simple_cnn(batch_X)
-            pred_y = func.softmax(pred_y, dim = 1)
+            # pred_y = func.softmax(pred_y, dim = 1)
             # Crossentropy berechnet intern schon den softmax https://discuss.pytorch.org/t/cross-entropy-loss-is-not-decreasing/43814/3
             loss = loss_function(pred_y, batch_y)
             loss.backward()
@@ -194,48 +194,37 @@ def detect_gpu() -> None:
         torch.cuda.is_available()
     )
 
+class PerformanceTracker:
+    
+    def __init__(self):
+        self.epoch_train_losses = []
+        self.epoch_train_acc = []
+        self.epoch_val_losses = []
+        self.epoch_val_acc = []
+
+    
+    def add_train(self, loss, acc):
+        self.epoch_train_losses.append(loss)
+        self.epoch_train_acc.append(acc)
+
+    
+    def add_val(self, loss, acc):
+        self.epoch_val_losses.append(loss)
+        self.epoch_val_acc.append(acc)
+
+
+    def save(self):
+        save_frame = pd.DataFrame({
+            'losses_train': self.epoch_train_losses,
+            'accuracies_train': self.epoch_train_acc
+            'losses_val': self.epoch_val_losses,
+            'accuracies_val': self.epoch_val_acc
+        })
+        save_frame.to_csv(
+            os.path.join('.', 'modelling', 'seperate_three', 'roots-epochs-metrics.csv'),
+            quoting = csv.QUOTE_ALL
+        )
+
 
 if __name__ == '__main__':
     main()
-
-
-
-
-
-"""
-The key step is between the last convolution and the first Linear block. Conv2d 
-outputs a tensor of shape [batch_size, n_features_conv, height, width] whereas 
-Linear expects [batch_size, n_features_lin]. To make the two align you need to 
-"stack" the 3 dimensions [n_features_conv, height, width] into one [n_features_lin]. 
-As follows, it must be that n_features_lin == n_features_conv * height * width. In 
-the original code this "stacking" is achieved by
-
-x = x.view(-1, self.num_flat_features(x))
-
-and if you inspect num_flat_features it just computes this n_features_conv * height * width 
-product. In other words, your first conv must have num_flat_features(x) input 
-features, where x is the tensor retrieved from the preceding convolution. But we 
-need to calculate this value ahead of time, so that we can initialize the network in 
-the first place...
-
-The calculation follows from inspecting the operations one by one.
-
-    input is 32x32
-    we do a 5x5 convolution without padding, so we lose 2 pixels at each side, 
-    we drop down to 28x28
-    we do maxpooling with receptive field of 2x2, we cut each dimension by half, 
-    down to 14x14
-    we do another 5x5 convolution without padding, we drop down to 10x10
-    we do another maxpooling, we drop down to 5x5
-
-and this 5x5 is why in the tutorial you see self.fc1 = nn.Linear(16 * 5 * 5, 120). 
-It's n_features_conv * height * width, when starting from a 32x32 image. If you want 
-to have a different input size, you have to redo the above calculation and adjust your 
-first Linear layer accordingly.
-
-For the further operations, it's just a chain of matrix multiplications (that's what 
-Linear does). So the only rule is that the n_features_out of previous Linear matches 
-n_features_in of the next one. Values 120 and 84 are entirely arbitrary, though they 
-were probably chosen by the author such that the resulting network performs well.
-
-"""
