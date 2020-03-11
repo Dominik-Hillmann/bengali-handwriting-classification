@@ -2,6 +2,7 @@
 from os import path
 import random
 import csv
+from statistics import mean
 
 # External modules
 import torch
@@ -18,7 +19,7 @@ from sklearn.model_selection import train_test_split
 DATA_PATH = path.join('data', 'generated-data')
 SEED = 69
 BATCH_SIZE = 100
-EPOCHS = 10
+EPOCHS = 1
 
 # Settings
 torch.manual_seed(SEED)
@@ -51,12 +52,15 @@ def train(
     val: Tuple[pd.DataFrame, pd.DataFrame],
     device: torch.device    
 ) -> None:
+
+    tracker = PerformanceTracker()
+
     train_X, train_y = train
     train_X, train_y = torch.from_numpy(train_X.values), torch.from_numpy(train_y.values)
     # train_X, train_y = train_X.type(torch.DoubleTensor), train_y.type(torch.LongTensor)
     val_X, val_y = val
     val_X, val_y = torch.from_numpy(val_X.values), torch.from_numpy(val_y.values)
-    # val_X, val_y = val_X.type(torch.DoubleTensor), val_y.type(torch.LongTensor)
+    val_X, val_y = val_X.to(device), val_y.to(device)
 
     simple_cnn = Net().to(device)
     simple_cnn = simple_cnn.float()
@@ -64,51 +68,73 @@ def train(
     optimizer = optim.Adam(simple_cnn.parameters(), lr = 0.001)
     loss_function = nn.CrossEntropyLoss() # multiclass, single label => categorical crossentropy as loss
 
-    print(list(simple_cnn.parameters())[0].grad)
-
     for epoch in range(EPOCHS):
         batch_range = range(0, len(train_X), BATCH_SIZE) # from 0, to the len of x, stepping BATCH_SIZE at a time. [:50] ..for now just to dev
+        train_losses = []
+        train_accuracies = []
+
         for i in tqdm(batch_range): 
-            # print(f"{i}:{i + BATCH_SIZE}")
-            # print(i, i + BATCH_SIZE)
             batch_X = train_X[i:i + BATCH_SIZE].view(-1, 1, 32, 32).float()
-            # print(batch_X)
             batch_y = train_y[i:i + BATCH_SIZE].long()
-
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-            simple_cnn.zero_grad()
 
-            pred_y = simple_cnn(batch_X)
             # pred_y = func.softmax(pred_y, dim = 1)
-            # Crossentropy berechnet intern schon den softmax https://discuss.pytorch.org/t/cross-entropy-loss-is-not-decreasing/43814/3
+            # Crossentropy berechnet intern schon den softmax 
+            # https://discuss.pytorch.org/t/cross-entropy-loss-is-not-decreasing/43814/3
+            simple_cnn.zero_grad()
+            pred_y = simple_cnn(batch_X)
             loss = loss_function(pred_y, batch_y)
+            train_losses.append(loss.item())
             loss.backward()
             optimizer.step() # Does the update
 
-        print(batch_y)
-        print(pred_y)
+            pred_y_indices = torch.argmax(pred_y, dim = 1)
+            num_correct = int((pred_y_indices == batch_y).int().sum())
+            batch_size = int(batch_y.shape[0])
+            accuracy = num_correct / batch_size
+            train_accuracies.append(accuracy)
 
-        print(f"Epoch: {epoch + 1}. Loss: {loss}")
+        val_loss, val_acc = validate((val_X, val_y), simple_cnn, loss_function, device)
+        tracker.add_train(mean(train_losses), mean(train_accuracies))
+        tracker.add_val(val_loss, val_acc)
+
+        print(f'Epoch: {epoch + 1}')
+        print(f'Train loss: {mean(train_losses)}')
+        print(f'Train accuracy: {mean(train_accuracies)}')
+        print(f'Val loss: {val_loss}')
+        print(f'Val accuracy: {val_acc}')
+    
+    tracker.save()
 
 
-def validate(test, cnn, device):
-    test_X, test_y = test
-    test_X, test_y = torch.from_numpy(test_X.values), torch.from_numpy(test_y.values)
-    test_X, test_y = test_X.float(), test_y.long()
+def validate(val, nn, loss_function, device):
+    val_X, val_y = val
+    # val_X, val_y = torch.from_numpy(val_X.values), torch.from_numpy(val_y.values)
+    val_X, val_y = val_X.float(), val_y.long()
+    val_X, val_y = val_X.to(device), val_y.to(device)
 
     correct = 0
     total = 0
+    losses = []
+    accuracies = []
+
+    batch_range = range(0, len(val_X), BATCH_SIZE)
     with torch.no_grad():
-        for i in tqdm(range(len(test_X))):
-            real_class = torch.argmax(test_y[i])
-            net_out = cnn(test_X[i].view(-1, 1, 50, 50).to(device))[0]  # returns a list, 
-            predicted_class = torch.argmax(net_out)
+        for i in batch_range:
+            batch_X = val_X[i:i + BATCH_SIZE].view(-1, 1, 32, 32).float()
+            batch_y = val_y[i:i + BATCH_SIZE].long()
 
-            if predicted_class == real_class:
-                correct += 1
-            total += 1
+            pred_y = nn(batch_X)
+            loss = loss_function(pred_y, batch_y)
+            losses.append(loss.item())
 
-    print("Accuracy: ", round(correct / total, 3))
+            pred_y_indices = torch.argmax(pred_y, dim = 1)
+            num_correct = int((pred_y_indices == batch_y).int().sum())
+            batch_size = int(batch_y.shape[0])
+            accuracy = num_correct / batch_size
+            accuracies.append(accuracy)
+
+    return mean(losses), mean(accuracies)
 
 
 class Net(nn.Module):
@@ -216,12 +242,12 @@ class PerformanceTracker:
     def save(self):
         save_frame = pd.DataFrame({
             'losses_train': self.epoch_train_losses,
-            'accuracies_train': self.epoch_train_acc
+            'accuracies_train': self.epoch_train_acc,
             'losses_val': self.epoch_val_losses,
             'accuracies_val': self.epoch_val_acc
         })
         save_frame.to_csv(
-            os.path.join('.', 'modelling', 'seperate_three', 'roots-epochs-metrics.csv'),
+            path.join('.', 'modelling', 'seperate_three', 'roots-epochs-metrics.csv'),
             quoting = csv.QUOTE_ALL
         )
 
