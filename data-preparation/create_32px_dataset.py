@@ -87,7 +87,7 @@ def save_converted_pics(train_y: pd.DataFrame, batches_list: list) -> None:
     """
 
     train_X_low_res = pd.concat(batches_list, axis = 0, ignore_index = False)
-    train_X_low_res = pd.concat([train_y, train_X_low_res], axis=1, sort=False)
+    train_X_low_res = pd.concat([train_y, train_X_low_res], axis = 1, sort = False)
     train_X_low_res.to_parquet(
         os.path.join(DATA_PATH, '32by32-y-and-X.parquet'),
         engine = 'pyarrow',

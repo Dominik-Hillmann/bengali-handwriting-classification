@@ -3,23 +3,24 @@ from os import path
 import random
 import csv
 from statistics import mean
-
 # External modules
 import torch
 import torch.nn as nn
 import torch.nn.functional as func
 import torch.optim as optim
 
+import matplotlib.pyplot as plt
 from tqdm import tqdm
 import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
-
+# Internal modules
+from utils.PerformanceTracker import PerformanceTracker
 # Constants
 DATA_PATH = path.join('data', 'generated-data')
 SEED = 69
 BATCH_SIZE = 100
-EPOCHS = 1
+EPOCHS = 50
 
 # Settings
 torch.manual_seed(SEED)
@@ -53,7 +54,7 @@ def train(
     device: torch.device    
 ) -> None:
 
-    tracker = PerformanceTracker()
+    tracker = PerformanceTracker(path.join('.', 'modelling', 'seperate_three'))
 
     train_X, train_y = train
     train_X, train_y = torch.from_numpy(train_X.values), torch.from_numpy(train_y.values)
@@ -62,7 +63,7 @@ def train(
     val_X, val_y = torch.from_numpy(val_X.values), torch.from_numpy(val_y.values)
     val_X, val_y = val_X.to(device), val_y.to(device)
 
-    simple_cnn = Net().to(device)
+    simple_cnn = ConvolutionalNeuralNet().to(device)
     simple_cnn = simple_cnn.float()
     
     optimizer = optim.Adam(simple_cnn.parameters(), lr = 0.001)
@@ -104,7 +105,8 @@ def train(
         print(f'Val loss: {val_loss}')
         print(f'Val accuracy: {val_acc}')
     
-    tracker.save()
+    tracker.save('test-metrics.csv')
+    tracker.graphs()
 
 
 def validate(val, nn, loss_function, device):
@@ -137,19 +139,20 @@ def validate(val, nn, loss_function, device):
     return mean(losses), mean(accuracies)
 
 
-class Net(nn.Module):
+class ConvolutionalNeuralNet(nn.Module):
 
-    def __init__(self):
+    def __init__(
+        self,
+        *(num_1st_filter, num_2nd_filter, num_3rd_filter): Tuple[int, int, int],
+        *(1st_layer_neurons, 2nd_layer_neurons): Tuple[int, int]
+    ):
         super().__init__()
-        # 1 Inputchannel, 32 Filter somit Outputfeatures, 3 mal 3 Filtergröße
-        self.conv1 = nn.Conv2d(1, 32, 3, stride = 1) 
-        # 32 neue Inputchannel = trainierte Features als Input, 64 Filter darauf, 3 mal 3 px große Filter
-        self.conv2 = nn.Conv2d(32, 64, 3) 
-        # 64 Inputfeatures, 128 Outputfeatues, hier nun auf höherem Niveu, sodass ein feuerndes Neuron Anwesenheit einer
-        self.conv3 = nn.Conv2d(64, 128, 3) 
+        # 32, 64, 128
+        self.conv1 = nn.Conv2d(1, num_1st_filter, 3, stride = 1)
+        self.conv2 = nn.Conv2d(num_1st_filter, num_2nd_filter, 3)
+        self.conv3 = nn.Conv2d(num_2nd_filter, num_3rd_filter, 3) 
 
         # First dense input = [batch_size, height * width * num_channels]
-        # .view is the torch tensor version of numpy's reshape
         x = torch.randn(32, 32).view(-1, 1, 32, 32)
         self._conv_out_len = None
         self.conv_forward(x)
@@ -158,14 +161,13 @@ class Net(nn.Module):
         self.dense2 = nn.Linear(512, 168) # 168 root letters to be predicted
 
 
-    def conv_forward(self, x):
-        # zuerst Aktivierung, auf den Aktivierungen dann erst größtes gewählt, 2 x 2 Pooling
+    def conv_forward(self, x: torch.tensor) -> torch.tensor:
+
         x = func.max_pool2d(func.relu(self.conv1(x)), (2, 2)) 
         x = func.max_pool2d(func.relu(self.conv2(x)), (2, 2)) 
         x = func.max_pool2d(func.relu(self.conv3(x)), (2, 2))
 
         if self._conv_out_len is None:
-            # x[0] because we need first element of the batch
             num_features = x[0].shape[0]
             num_px_height = x[0].shape[1]
             num_px_width = x[0].shape[2]
@@ -174,20 +176,15 @@ class Net(nn.Module):
         return x
 
     
-    def prepare_conv_to_dense(self, x):
+    def prepare_conv_to_dense(self, x: torch.tensor) -> torch.tensor:
         return x.view(-1, self._conv_out_len)
     
 
-    def dense_forward(self, x):
+    def dense_forward(self, x: torch.tensor) -> torch.tensor:
         x = func.relu(self.dense1(x))
         x = func.relu(self.dense2(x))
 
         return x
-
-    
-    # def output_activation(self, x):
-    #     # multiclass, single label => softmax
-    #     return func.softmax(x, dim = 1)
 
 
     def forward(self, x):
@@ -199,16 +196,6 @@ class Net(nn.Module):
         return x
 
 
-def get_data(data_path: str, letter_part: str) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    data = pd.read_parquet(path.join(data_path, '32by32-y-and-X.parquet'))
-    data_y = data[letter_part] # data[data.columns[:3]]
-    # data_y = pd.get_dummies(data_y[letter_part]), does not need to be one hot encoded for PyTorch cross entropy function
-    data_X = data[data.columns[3:]]
-    
-    train_X, test_X, train_y, test_y = train_test_split(data_X, data_y, test_size = 0.2, random_state = SEED)
-    train_X, val_X, train_y, val_y = train_test_split(train_X, train_y, test_size = 0.2, random_state = SEED)
-
-    return train_X, train_y, val_X, val_y, test_X, test_y
 
 
 def detect_gpu() -> None:
@@ -219,37 +206,6 @@ def detect_gpu() -> None:
         torch.cuda.get_device_name(device_num),
         torch.cuda.is_available()
     )
-
-class PerformanceTracker:
-    
-    def __init__(self):
-        self.epoch_train_losses = []
-        self.epoch_train_acc = []
-        self.epoch_val_losses = []
-        self.epoch_val_acc = []
-
-    
-    def add_train(self, loss, acc):
-        self.epoch_train_losses.append(loss)
-        self.epoch_train_acc.append(acc)
-
-    
-    def add_val(self, loss, acc):
-        self.epoch_val_losses.append(loss)
-        self.epoch_val_acc.append(acc)
-
-
-    def save(self):
-        save_frame = pd.DataFrame({
-            'losses_train': self.epoch_train_losses,
-            'accuracies_train': self.epoch_train_acc,
-            'losses_val': self.epoch_val_losses,
-            'accuracies_val': self.epoch_val_acc
-        })
-        save_frame.to_csv(
-            path.join('.', 'modelling', 'seperate_three', 'roots-epochs-metrics.csv'),
-            quoting = csv.QUOTE_ALL
-        )
 
 
 if __name__ == '__main__':
