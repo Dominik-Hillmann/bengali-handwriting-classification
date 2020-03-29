@@ -1,3 +1,12 @@
+# Python libraries
+from os import path
+import csv
+
+# External modules
+import pandas as pd
+import matplotlib.pyplot as plt
+
+
 class PerformanceTracker:
     
     def __init__(self, save_dir):
@@ -27,6 +36,7 @@ class PerformanceTracker:
         })
 
         save_frame.to_csv(path.join(self.save_dir, file_name), quoting = csv.QUOTE_ALL)
+
 
     def graphs(self):
         
